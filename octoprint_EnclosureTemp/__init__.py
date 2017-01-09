@@ -1,15 +1,11 @@
 # coding=utf-8
 from __future__ import absolute_import
 
-### (Don't forget to remove me)
-# This is a basic skeleton for your plugin's __init__.py. You probably want to adjust the class name of your plugin
-# as well as the plugin mixins it's subclassing from. This is really just a basic skeleton to get you started,
-# defining your plugin as a template plugin, settings and asset plugin. Feel free to add or remove mixins
-# as necessary.
-#
-# Take a look at the documentation on what other plugin mixins are available.
+import os
+import re
 
 import octoprint.plugin
+from octoprint.util import RepeatedTimer
 
 class EnclosuretempPlugin(octoprint.plugin.StartupPlugin,
                           octoprint.plugin.SettingsPlugin,
@@ -17,34 +13,104 @@ class EnclosuretempPlugin(octoprint.plugin.StartupPlugin,
                           octoprint.plugin.TemplatePlugin):
 
 
-        def on_after_startup(self):
-                self._logger.info("Hello World")
-
+        def __init__(self):
+                self.display_navbar = True
+                self._checkTempTimer = None
+                self.update_interval = 5.0
         
-	##~~ SettingsPlugin mixin
+        def on_after_startup(self):
+                self._logger.info("Enclosure Temperature plugin startup")
+                self._logger.info("Sensor name/directory = {}".format(self._settings.get(["sensor_name"])))
+                self._logger.info("Starting Timer with {}s interval".format(self.update_interval))
+                self.startTimer(self.update_interval)
+        
 
-	def get_settings_defaults(self):
+
+        # Template Plugin
+        #def get_template_vars(self):
+        #        return dict(sensor_name=self._settings.get(["sensor_name"]))
+
+        def get_template_configs(self):
+                """For the settings template I want to use the default bindings (not sure what they
+                are binding... But basically, I want octoprint to handle the display.
+                For the navbar portion, I want to set that display up myself, so I don't include it here
+                and it default to cutom_bindings=True (I think)
+                """
+                return [
+                        #dict(type="navbar", custom_bindings=False),
+                        dict(type="settings", custom_bindings=False)
+                        ]
+                
+        # My functions
+        def startTimer(self, interval):
+                self._checkTempTimer = RepeatedTimer(interval, self.get_temp, None, None, True)
+                self._checkTempTimer.start()
+                self._logger.info("Started timer with {}s interval".format(interval))
+
+                
+        def get_temp(self):
+                """Reads temperature from 1-wire probe at address taken from the settings tab.
+                returns the value, and sends a "plugin_message" which will trigger the javascript
+                code to update the value on the webpage.
+                """
+                self._logger.info("Reading temperture...")
+
+                def temp_raw(filename):
+                        with open(filename,'r') as f:
+                                lines=f.readlines()
+                        return(lines)
+
+                def read_temp(device_name):
+                        max_attempts = 10
+                        attempt = 0
+                        filename = os.path.join('/sys/bus/w1/devices',device_name,'w1_slave')
+                        try:
+                                lines = temp_raw(filename)
+                        except IOError:
+                                temp = -99
+                        else:
+                                while lines[0].strip()[-3:] != 'YES' and attempt < max_attempts:
+                                        time.sleep(0.5)
+                                        lines = temp_raw(filename)
+                                        attempt += 1
+                                match_obj=re.match('.*t=([0-9]*)',lines[1])
+                                if match_obj is not None and attempt < max_attempts:
+                                        temp = float(match_obj.group(1))/1000.0
+                                else:
+                                        temp = -99
+                        return(temp)
+
+                self._logger.info("self._identifier = {}".format(self._identifier))
+                device_name = self._settings.get(["sensor_name"])
+                self._logger.info("sensor_name = {}".format(device_name))
+                temp = read_temp(device_name)
+                self._logger.info("enclosure temp = {}oC".format(temp))
+                self.current_temp = temp
+                self._plugin_manager.send_plugin_message(self._identifier, dict(enclosureTemp=self.current_temp))
+
+
+        def get_settings_defaults(self):
+                """default Settings. Can be overridden in the settings tab I think"""
 		return dict(
-			# put your plugin's default settings here
+                        sensor_name = '28-031455b66cff'
 		)
-
+                        
 	##~~ AssetPlugin mixin
 
 	def get_assets(self):
-		# Define your plugin's asset files to automatically include in the
-		# core UI here.
+                """Define your plugin's asset files to automatically include in the
+		core UI here."""
 		return dict(
 			js=["js/EnclosureTemp.js"],
-			css=["css/EnclosureTemp.css"],
-			less=["less/EnclosureTemp.less"]
+			#css=["css/EnclosureTemp.css"],
+			#less=["less/EnclosureTemp.less"]
 		)
 
 	##~~ Softwareupdate hook
-
 	def get_update_information(self):
-		# Define the configuration for your plugin to use with the Software Update
-		# Plugin here. See https://github.com/foosel/OctoPrint/wiki/Plugin:-Software-Update
-		# for details.
+                """Define the configuration for your plugin to use with the Software Update
+		Plugin here. See https://github.com/foosel/OctoPrint/wiki/Plugin:-Software-Update
+		for details. This is the default setup"""
 		return dict(
 			EnclosureTemp=dict(
 				displayName="Enclosuretemp Plugin",
